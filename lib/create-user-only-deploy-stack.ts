@@ -7,48 +7,40 @@ import {
   PolicyDocument,
   PolicyStatement,
   Effect,
-  ManagedPolicy
+  ManagedPolicy,
+  ArnPrincipal
 } from '@aws-cdk/aws-iam'
-import { Duration } from '@aws-cdk/core'
+import { Duration, CfnOutput } from '@aws-cdk/core'
 
 export class CreateUserOnlyDeployStack extends cdk.Stack {
   constructor(scope: cdk.Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props)
 
-    // デプロイ用の IAM ユーザー
-    const deployUser = new User(this, 'DeployUser', {
-      userName: 'ads-submit-for-circleci'
-    })
+    const deployStackName = 'hogehoge'
 
-    // デプロイ用のIAMユーザに付与するIAMポリシー（AssumeRoleできる）
-    const policyStatement = new PolicyStatement({
-      effect: Effect.ALLOW,
-      actions: ['sts:AssumeRole'],
-      // TODO: DeployRoleForUser.Arn の記述が必要
-      resources: []
-    })
-    new Policy(this, 'DeployUserPoricy', {
-      policyName: 'ads-submit-for-circleci-policy',
-      users: [deployUser],
-      statements: [policyStatement]
-    })
+    // デプロイ用の IAM ユーザー
+    const deployUser = createDeployUser(this, 'DeployUser', 'deploy-iam-user')
 
     // CloudFormation用のIAMロール（AWS各サービスに対する権限）
-    new Role(this, 'DeployRoleForCloudFormation', {
-      roleName: 'deploy-iam-sample-deploy-role-for-cloudformation',
-      assumedBy: new ServicePrincipal('cloudformation.amazonaws.com'),
-      maxSessionDuration: Duration.hours(1),
-      managedPolicies: [
-        ManagedPolicy.fromAwsManagedPolicyName('AWSCloudFormationFullAccess'),
-        ManagedPolicy.fromAwsManagedPolicyName('AWSLambdaFullAccess'),
-        ManagedPolicy.fromAwsManagedPolicyName('IAMFullAccess'),
-        ManagedPolicy.fromAwsManagedPolicyName('AmazonAPIGatewayAdministrator')
-      ]
-    })
+    const roleForCloudFormation = new Role(
+      this,
+      'DeployRoleForCloudFormation',
+      {
+        roleName: 'deploy-iam-deploy-role-for-cloudformation',
+        assumedBy: new ServicePrincipal('cloudformation.amazonaws.com'),
+        maxSessionDuration: Duration.hours(1),
+        managedPolicies: [
+          ManagedPolicy.fromAwsManagedPolicyName('AWSCloudFormationFullAccess'),
+          ManagedPolicy.fromAwsManagedPolicyName('AWSLambdaFullAccess'),
+          ManagedPolicy.fromAwsManagedPolicyName('IAMFullAccess'),
+          ManagedPolicy.fromAwsManagedPolicyName(
+            'AmazonAPIGatewayAdministrator'
+          )
+        ]
+      }
+    )
 
-    new Policy(this, 'DeployRoleForUser2', {
-      policyName: 'deploy-iam-sample-deploy-policy-for-user'
-    })
+    // デプロイ用のIAMユーザがAssumeRoleするIAMロール（CloudFormationとS3に対する権限）
     const policyStatementForCloudFormation = new PolicyStatement({
       effect: Effect.ALLOW,
       actions: [
@@ -59,48 +51,60 @@ export class CreateUserOnlyDeployStack extends cdk.Stack {
         'cloudformation:DescribeStacks',
         'cloudformation:ExecuteChangeSet'
       ],
-      resources: []
+      resources: [
+        `arn:aws:cloudformation:${this.region}:${this.account}:stack/${deployStackName}/*`
+      ]
+    })
+    const policyStatementForIam = new PolicyStatement({
+      effect: Effect.ALLOW,
+      actions: ['iam:PassRole'],
+      resources: [roleForCloudFormation.roleArn]
     })
     const policyDocument = new PolicyDocument()
     policyDocument.addStatements(policyStatementForCloudFormation)
-
-    // デプロイ用のIAMユーザがAssumeRoleするIAMロール（CloudFormationとS3に対する権限）
-    new Role(this, 'DeployRoleForUser', {
-      roleName: 'deploy-iam-sample-deploy-role-for-user',
-      assumedBy: new ServicePrincipal(deployUser.userArn),
+    policyDocument.addStatements(policyStatementForIam)
+    const deployRole = new Role(this, 'DeployRoleForUser', {
+      roleName: 'deploy-iam-deploy-role-for-user',
+      assumedBy: new ArnPrincipal(deployUser.userArn),
       externalId: 'any-id-hoge-fuga',
       inlinePolicies: {
-        '': policyDocument
+        'deploy-iam-deploy-policy-for-user': policyDocument
       }
     })
 
-    // const policyStatementForRole = new PolicyStatement({
-    //   effect: Effect.ALLOW,
-    //   actions: ['sts:AssumeRole'],
-    //   principals: [deployUser],
-    //   conditions: [
-    //     { 'StringEquals': { "sts:ExternalId": "any-id-hoge-fuga" }}
-    //   ]
-    // })
-    // // const policyDocument = new PolicyDocument().addStatements(policyStatementForRole)
-    // const deployRole = new Role(this, 'DeployRoleForUser', {
-    //   assumedBy: new ServicePrincipal(deployUser.userArn),
-    //   roleName: 'ads-submit-for-deploy-role'
-    // })
-    // deployRole.addToPolicy(policyStatementForRole)
+    // デプロイ用のIAMユーザに付与するIAMポリシー（AssumeRoleできる）
+    const policyStatement = new PolicyStatement({
+      effect: Effect.ALLOW,
+      actions: ['sts:AssumeRole'],
+      resources: [deployRole.roleArn]
+    })
+    new Policy(this, 'DeployUserPoricy', {
+      policyName: 'ads-submit-for-circleci-policy',
+      users: [deployUser],
+      statements: [policyStatement]
+    })
 
-    // const policyStatement = new PolicyStatement({
-    //   effect: Effect.ALLOW,
-    //   actions: ['sts:AssumeRole'],
-    //   resources: [deployRole.roleArn]
-    // })
-    // const policy = new Policy(this, 'DeployUserPoricy', {
-    //   policyName: 'ads-submit-for-circleci-policy',
-    //   users: [deployUser],
-    //   statements: [policyStatement]
-    // })
-
-    // // const pCondition = new PrincipalWithConditions(deployRole, { conditions: { "StringEquals" : { "sts:ExternalId": "any-id-hoge-fuga" }}})
-    // const doc = new PolicyStatement().addCondition('StringEquals', { "sts:ExternalId": "any-id-hoge-fuga" })
+    new CfnOutput(this, 'OutputDeployUser', {
+      description: 'IAM User for Deploy',
+      value: deployUser.userArn
+    })
+    new CfnOutput(this, 'OutputDeployRoleForUser', {
+      description: 'IAM Role (AssumeRole) for Deploy User',
+      value: deployRole.roleArn
+    })
+    new CfnOutput(this, 'OutputDeployRoleForCloudFormation', {
+      description: 'IAM Role (AssumeRole) for  Deploy CloudFormation',
+      value: roleForCloudFormation.roleArn
+    })
   }
+}
+
+const createDeployUser = (
+  scope: cdk.Construct,
+  id: string,
+  userName: string
+) => {
+  return new User(scope, id, {
+    userName: userName
+  })
 }
