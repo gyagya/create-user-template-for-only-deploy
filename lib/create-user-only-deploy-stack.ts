@@ -19,25 +19,17 @@ export class CreateUserOnlyDeployStack extends cdk.Stack {
     const deployStackName = 'hogehoge'
 
     // デプロイ用の IAM ユーザー
-    const deployUser = createDeployUser(this, 'DeployUser', 'deploy-iam-user')
+    const userForDeploy = createDeployUser(
+      this,
+      'DeployUser',
+      'deploy-iam-user'
+    )
 
     // CloudFormation用のIAMロール（AWS各サービスに対する権限）
-    const roleForCloudFormation = new Role(
+    const roleForCloudFormation = createCloudFormationRole(
       this,
       'DeployRoleForCloudFormation',
-      {
-        roleName: 'deploy-iam-deploy-role-for-cloudformation',
-        assumedBy: new ServicePrincipal('cloudformation.amazonaws.com'),
-        maxSessionDuration: Duration.hours(1),
-        managedPolicies: [
-          ManagedPolicy.fromAwsManagedPolicyName('AWSCloudFormationFullAccess'),
-          ManagedPolicy.fromAwsManagedPolicyName('AWSLambdaFullAccess'),
-          ManagedPolicy.fromAwsManagedPolicyName('IAMFullAccess'),
-          ManagedPolicy.fromAwsManagedPolicyName(
-            'AmazonAPIGatewayAdministrator'
-          )
-        ]
-      }
+      'deploy-iam-deploy-role-for-cloudformation'
     )
 
     // デプロイ用のIAMユーザがAssumeRoleするIAMロール（CloudFormationとS3に対する権限）
@@ -65,7 +57,7 @@ export class CreateUserOnlyDeployStack extends cdk.Stack {
     policyDocument.addStatements(policyStatementForIam)
     const deployRole = new Role(this, 'DeployRoleForUser', {
       roleName: 'deploy-iam-deploy-role-for-user',
-      assumedBy: new ArnPrincipal(deployUser.userArn),
+      assumedBy: new ArnPrincipal(userForDeploy.userArn),
       externalId: 'any-id-hoge-fuga',
       inlinePolicies: {
         'deploy-iam-deploy-policy-for-user': policyDocument
@@ -73,20 +65,27 @@ export class CreateUserOnlyDeployStack extends cdk.Stack {
     })
 
     // デプロイ用のIAMユーザに付与するIAMポリシー（AssumeRoleできる）
-    const policyStatement = new PolicyStatement({
-      effect: Effect.ALLOW,
-      actions: ['sts:AssumeRole'],
-      resources: [deployRole.roleArn]
-    })
-    new Policy(this, 'DeployUserPoricy', {
-      policyName: 'ads-submit-for-circleci-policy',
-      users: [deployUser],
-      statements: [policyStatement]
-    })
+    createDeployPolicy(
+      this,
+      'DeployUserPoricy',
+      'ads-submit-for-circleci-policy',
+      userForDeploy,
+      deployRole
+    )
+    // const policyStatement = new PolicyStatement({
+    //   effect: Effect.ALLOW,
+    //   actions: ['sts:AssumeRole'],
+    //   resources: [deployRole.roleArn]
+    // })
+    // new Policy(this, 'DeployUserPoricy', {
+    //   policyName: 'ads-submit-for-circleci-policy',
+    //   users: [userForDeploy],
+    //   statements: [policyStatement]
+    // })
 
     new CfnOutput(this, 'OutputDeployUser', {
       description: 'IAM User for Deploy',
-      value: deployUser.userArn
+      value: userForDeploy.userArn
     })
     new CfnOutput(this, 'OutputDeployRoleForUser', {
       description: 'IAM Role (AssumeRole) for Deploy User',
@@ -106,5 +105,42 @@ const createDeployUser = (
 ) => {
   return new User(scope, id, {
     userName: userName
+  })
+}
+
+const createCloudFormationRole = (
+  scope: cdk.Construct,
+  id: string,
+  roleName: string
+) => {
+  return new Role(scope, id, {
+    roleName: roleName,
+    assumedBy: new ServicePrincipal('cloudformation.amazonaws.com'),
+    maxSessionDuration: Duration.hours(1),
+    managedPolicies: [
+      ManagedPolicy.fromAwsManagedPolicyName('AWSCloudFormationFullAccess'),
+      ManagedPolicy.fromAwsManagedPolicyName('AWSLambdaFullAccess'),
+      ManagedPolicy.fromAwsManagedPolicyName('IAMFullAccess'),
+      ManagedPolicy.fromAwsManagedPolicyName('AmazonAPIGatewayAdministrator')
+    ]
+  })
+}
+
+const createDeployPolicy = (
+  scope: cdk.Construct,
+  id: string,
+  policyName: string,
+  deployUser: User,
+  deployRole: Role
+) => {
+  const policyStatement = new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ['sts:AssumeRole'],
+    resources: [deployRole.roleArn]
+  })
+  new Policy(scope, id, {
+    policyName: policyName,
+    users: [deployUser],
+    statements: [policyStatement]
   })
 }
